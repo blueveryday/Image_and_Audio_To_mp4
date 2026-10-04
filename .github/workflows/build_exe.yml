@@ -1,0 +1,154 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build on Windows
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Setup MSVC
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Verify MSVC
+        shell: pwsh
+        run: |
+          cl.exe 2>&1 | Select-Object -First 3
+          echo "MSVC compiler is available"
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install nuitka ordered-set zstandard
+
+      - name: Build EXE with Nuitka (MSVC standalone)
+        shell: pwsh
+        run: |
+          python -m nuitka `
+            --standalone `
+            --msvc=latest `
+            --assume-yes-for-downloads `
+            --windows-console-mode=disable `
+            --enable-plugin=tk-inter `
+            --output-dir=dist `
+            --output-filename=ImageAudioTomp4.exe `
+            --remove-output `
+            --python-flag=no_docstrings `
+            --lto=yes `
+            --noinclude-pytest-mode=nofollow `
+            --noinclude-setuptools-mode=nofollow `
+            --noinclude-unittest-mode=nofollow `
+            --noinclude-pydoc-mode=nofollow `
+            --noinclude-IPython-mode=nofollow `
+            --nofollow-import-to=numpy `
+            --nofollow-import-to=pandas `
+            --nofollow-import-to=matplotlib `
+            --nofollow-import-to=scipy `
+            --nofollow-import-to=PIL `
+            --nofollow-import-to=cv2 `
+            --nofollow-import-to=PyQt5 `
+            --nofollow-import-to=PyQt6 `
+            --nofollow-import-to=PySide2 `
+            --nofollow-import-to=PySide6 `
+            --nofollow-import-to=wx `
+            --nofollow-import-to=jupyter `
+            --nofollow-import-to=notebook `
+            --nofollow-import-to=Cython `
+            "Image_Audio_To_mp4.pyw"
+
+      - name: Locate output
+        shell: pwsh
+        run: |
+          $dir = Get-ChildItem -Path dist -Directory -Filter "*.dist" | Select-Object -First 1
+          if (-not $dir) { throw "找不到 Nuitka 输出目录" }
+          $exe = Join-Path $dir.FullName "ImageAudioTomp4.exe"
+          if (-not (Test-Path $exe)) { throw "找不到 $exe" }
+          Get-ChildItem -Recurse $dir.FullName | Measure-Object -Property Length -Sum | Format-List
+          echo "DIST_PATH=$($dir.FullName)" >> $env:GITHUB_ENV
+
+      - name: Rename to ImageAudioTomp4
+        shell: pwsh
+        run: |
+          $target = "dist/ImageAudioTomp4"
+          if (Test-Path $target) { Remove-Item -Recurse -Force $target }
+          Move-Item -Path "$env:DIST_PATH" -Destination $target
+          if (-not (Test-Path "$target/ImageAudioTomp4.exe")) {
+            throw "重命名后找不到 exe"
+          }
+          Get-ChildItem $target | Select-Object Name | Format-Table -AutoSize
+
+      - name: Extract FFmpeg and FFprobe
+        shell: pwsh
+        run: |
+          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+          if (-not (Test-Path $sevenZip)) { $sevenZip = "7z" }
+          $archive = "assets/ffmpeg-win64.7z"
+          if (-not (Test-Path $archive)) { throw "找不到 $archive" }
+          & $sevenZip x $archive -o"dist/ImageAudioTomp4" -y
+          if (-not (Test-Path "dist/ImageAudioTomp4/ffmpeg.exe"))  { throw "ffmpeg.exe 解压失败" }
+          if (-not (Test-Path "dist/ImageAudioTomp4/ffprobe.exe")) { throw "ffprobe.exe 解压失败" }
+          Get-ChildItem "dist/ImageAudioTomp4/ff*.exe" | Format-Table Name, Length
+
+      - name: Package with 7z (include commit SHA)
+        shell: pwsh
+        run: |
+          $shortSha = "${{ github.sha }}".Substring(0, 7)
+          $archiveName = "ImageAudioTomp4-$shortSha.7z"
+          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+          if (-not (Test-Path $sevenZip)) { $sevenZip = "7z" }
+          Push-Location dist
+          & $sevenZip a -t7z -mx=9 $archiveName "ImageAudioTomp4"
+          Pop-Location
+          if (-not (Test-Path "dist/$archiveName")) {
+            throw "7z 压缩失败：未找到 dist/$archiveName"
+          }
+          "ARCHIVE_NAME=$archiveName" >> $env:GITHUB_ENV
+          "SHORT_SHA=$shortSha"       >> $env:GITHUB_ENV
+          Get-Item "dist/$archiveName" | Format-List Name, Length
+
+      - name: Verify archive layout
+        shell: pwsh
+        run: |
+          $sevenZip = "C:\Program Files\7-Zip\7z.exe"
+          if (-not (Test-Path $sevenZip)) { $sevenZip = "7z" }
+          & $sevenZip l "dist/$env:ARCHIVE_NAME" | Select-Object -First 20
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ImageAudioTomp4-windows
+          path: |
+            dist/ImageAudioTomp4
+            dist/${{ env.ARCHIVE_NAME }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Create Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ env.ARCHIVE_NAME }}
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
