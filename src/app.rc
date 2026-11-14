@@ -1,0 +1,3 @@
+// 内嵌 manifest:启用 Common Controls 6(现代外观)和高 DPI 支持
+// 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID,24 = RT_MANIFEST
+1 24 "app.manifest"
