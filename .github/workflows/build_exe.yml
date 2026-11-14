@@ -126,6 +126,7 @@ jobs:
         with:
           tag_name: v2.0.${{ github.run_number }}
           name: v2.0.${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
           files: dist/${{ env.ARCHIVE_NAME }}
           generate_release_notes: true
         env:
